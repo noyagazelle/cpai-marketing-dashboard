@@ -1,0 +1,20 @@
+# Core app
+streamlit>=1.36
+pandas>=2.0
+plotly>=5.20
+
+# Excel parsing: xlsx (openpyxl) AND legacy .xls (xlrd)
+openpyxl>=3.1
+xlrd>=2.0.1
+
+# GA4 live connection (Milestone 3) — safe to install now
+google-analytics-data>=0.18
+
+# Persistent history storage when deployed (Google Cloud Storage bucket)
+google-cloud-storage>=2.16
+
+# Optional AI narrative layer (auto-detected if a key is present)
+anthropic>=0.39
+
+# Config
+python-dotenv>=1.0

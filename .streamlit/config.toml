@@ -1,0 +1,12 @@
+# Streamlit base theme — softer dark (CyberPro AI accents).
+# branding.py handles the finer styling; this sets the widget/base colors.
+[theme]
+base = "dark"
+primaryColor = "#2DBCDF"
+backgroundColor = "#1B2433"
+secondaryBackgroundColor = "#232E40"
+textColor = "#E6EDF3"
+font = "sans serif"
+
+[browser]
+gatherUsageStats = false

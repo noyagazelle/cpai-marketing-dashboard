@@ -1,0 +1,19 @@
+# Secrets & config
+.env
+.streamlit/secrets.toml
+*service-account*.json
+*credentials*.json
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# OS
+.DS_Store
+
+# Uploaded / generated data (keep sample_data tracked; ignore ad-hoc uploads)
+uploads/
+exports/
+history/
