@@ -17,3 +17,6 @@ venv/
 uploads/
 exports/
 history/
+
+# real LinkedIn sample export — keep local, not in the (public) repo
+sample_data/
