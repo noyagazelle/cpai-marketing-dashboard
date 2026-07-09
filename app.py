@@ -7,11 +7,13 @@ in st.session_state so every view sees them regardless of the active tab. GA4
 data lives in st.session_state['ga4_data']. On first load we seed the bundled
 sample data so the dashboard isn't empty.
 """
+import hmac
 from pathlib import Path
 
 import streamlit as st
 
 import branding as B
+import config
 import history
 import loaders
 from connectors import ga4
@@ -25,6 +27,29 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 st.markdown(B.CUSTOM_CSS, unsafe_allow_html=True)
+
+
+# --------------------------------------------------------------------------- #
+# Password gate — active only when APP_PASSWORD is set (i.e. when deployed).
+# Runs server-side, so the password is never exposed to the browser.
+# --------------------------------------------------------------------------- #
+def _password_gate():
+    pw = config.get("APP_PASSWORD")
+    if not pw or st.session_state.get("_authed"):
+        return
+    st.markdown(f"## 🔒 {B.COMPANY_NAME} · Marketing Analytics")
+    st.caption("This dashboard is private. Enter the team password to continue.")
+    entered = st.text_input("Team password", type="password")
+    if entered:
+        if hmac.compare_digest(entered, str(pw)):
+            st.session_state["_authed"] = True
+            st.rerun()
+        else:
+            st.error("Incorrect password — try again.")
+    st.stop()
+
+
+_password_gate()
 
 # On first load (or after a session/server reset), restore data durably:
 #   1) the last uploaded working set (survives resets), else
