@@ -10,7 +10,10 @@ xlrd>=2.0.1
 # GA4 live connection (Milestone 3) — safe to install now
 google-analytics-data>=0.18
 
-# Persistent history storage when deployed (Google Cloud Storage bucket)
+# Persistent history storage when deployed:
+#  - GitHub backend (default choice) needs only `requests`
+#  - Google Cloud Storage backend is optional (needs billing)
+requests>=2.31
 google-cloud-storage>=2.16
 
 # Optional AI narrative layer (auto-detected if a key is present)

@@ -27,8 +27,14 @@ _CURRENT = "_current"
 
 
 # --------------------------------------------------------------------------- #
-# Storage backend (local disk OR Google Cloud Storage)
+# Storage backend — picked automatically:
+#   * GitHub repo (data branch) when GITHUB_TOKEN + GITHUB_REPO are set
+#   * Google Cloud Storage when GCS_BUCKET is set
+#   * local disk otherwise (default on your own machine)
+# All four primitives below (_write/_read/_list/_delete) dispatch on the backend.
 # --------------------------------------------------------------------------- #
+
+# ---- Google Cloud Storage ----
 def _bucket_name() -> Optional[str]:
     return config.get("GCS_BUCKET")
 
@@ -53,8 +59,82 @@ def _gcs_bucket():
     return client.bucket(_bucket_name())
 
 
+# ---- GitHub (free, no billing) ----
+_GH_API = "https://api.github.com"
+_gh_tree_cache: dict = {"ts": 0.0, "tree": None}
+
+
+def _gh_conf():
+    return (config.get("GITHUB_TOKEN"), config.get("GITHUB_REPO"),
+            config.get("GITHUB_BRANCH", "data"))
+
+
+def _use_github() -> bool:
+    tok, repo, _ = _gh_conf()
+    return bool(tok and repo)
+
+
+def _gh_headers():
+    tok, _, _ = _gh_conf()
+    return {"Authorization": f"Bearer {tok}", "Accept": "application/vnd.github+json"}
+
+
+def _gh_ensure_branch():
+    import requests
+    _, repo, branch = _gh_conf()
+    if requests.get(f"{_GH_API}/repos/{repo}/branches/{branch}",
+                    headers=_gh_headers()).status_code == 200:
+        return
+    info = requests.get(f"{_GH_API}/repos/{repo}", headers=_gh_headers()).json()
+    default = info.get("default_branch", "main")
+    ref = requests.get(f"{_GH_API}/repos/{repo}/git/ref/heads/{default}",
+                       headers=_gh_headers()).json()
+    requests.post(f"{_GH_API}/repos/{repo}/git/refs", headers=_gh_headers(),
+                  json={"ref": f"refs/heads/{branch}", "sha": ref["object"]["sha"]})
+
+
+def _gh_get(relpath: str):
+    """(bytes, sha) for history/<relpath>, or (None, None)."""
+    import requests
+    _, repo, branch = _gh_conf()
+    r = requests.get(f"{_GH_API}/repos/{repo}/contents/history/{relpath}",
+                     headers=_gh_headers(), params={"ref": branch})
+    if r.status_code != 200:
+        return None, None
+    import base64
+    j = r.json()
+    return base64.b64decode(j["content"]), j["sha"]
+
+
+def _gh_tree() -> list[str]:
+    import time
+    if _gh_tree_cache["tree"] is not None and time.time() - _gh_tree_cache["ts"] < 15:
+        return _gh_tree_cache["tree"]
+    import requests
+    _, repo, branch = _gh_conf()
+    r = requests.get(f"{_GH_API}/repos/{repo}/git/trees/{branch}",
+                     headers=_gh_headers(), params={"recursive": "1"})
+    tree = ([t["path"] for t in r.json().get("tree", []) if t["type"] == "blob"]
+            if r.status_code == 200 else [])
+    _gh_tree_cache.update(ts=time.time(), tree=tree)
+    return tree
+
+
+# ---- Dispatchers ----
 def _write_bytes(relpath: str, blob: bytes):
-    if _use_gcs():
+    if _use_github():
+        import base64, requests
+        _, repo, branch = _gh_conf()
+        _gh_ensure_branch()
+        _, sha = _gh_get(relpath)
+        payload = {"message": f"data: update {relpath}",
+                   "content": base64.b64encode(blob).decode(), "branch": branch}
+        if sha:
+            payload["sha"] = sha
+        requests.put(f"{_GH_API}/repos/{repo}/contents/history/{relpath}",
+                     headers=_gh_headers(), json=payload)
+        _gh_tree_cache["tree"] = None
+    elif _use_gcs():
         _gcs_bucket().blob(f"history/{relpath}").upload_from_string(blob)
     else:
         p = HISTORY_DIR / relpath
@@ -63,6 +143,8 @@ def _write_bytes(relpath: str, blob: bytes):
 
 
 def _read_bytes(relpath: str) -> Optional[bytes]:
+    if _use_github():
+        return _gh_get(relpath)[0]
     if _use_gcs():
         b = _gcs_bucket().blob(f"history/{relpath}")
         return b.download_as_bytes() if b.exists() else None
@@ -72,6 +154,9 @@ def _read_bytes(relpath: str) -> Optional[bytes]:
 
 def _list_paths(prefix: str) -> list[str]:
     """Relative paths (below the history root) under `prefix`."""
+    if _use_github():
+        pre = f"history/{prefix}"
+        return [p[len("history/"):] for p in _gh_tree() if p.startswith(pre)]
     if _use_gcs():
         it = _gcs_bucket().list_blobs(prefix=f"history/{prefix}")
         return [b.name[len("history/"):] for b in it if not b.name.endswith("/")]
@@ -82,7 +167,18 @@ def _list_paths(prefix: str) -> list[str]:
 
 
 def _delete_prefix(prefix: str):
-    if _use_gcs():
+    if _use_github():
+        import requests
+        _, repo, branch = _gh_conf()
+        for rel in _list_paths(prefix):
+            _, sha = _gh_get(rel)
+            if sha:
+                requests.request("DELETE",
+                                 f"{_GH_API}/repos/{repo}/contents/history/{rel}",
+                                 headers=_gh_headers(),
+                                 json={"message": f"data: delete {rel}", "sha": sha, "branch": branch})
+        _gh_tree_cache["tree"] = None
+    elif _use_gcs():
         for b in _gcs_bucket().list_blobs(prefix=f"history/{prefix}"):
             b.delete()
     else:
