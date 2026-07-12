@@ -66,7 +66,7 @@ _gh_tree_cache: dict = {"ts": 0.0, "tree": None}
 
 def _gh_conf():
     return (config.get("GITHUB_TOKEN"), config.get("GITHUB_REPO"),
-            config.get("GITHUB_BRANCH", "data"))
+            config.get("GITHUB_BRANCH", "main"))
 
 
 def _use_github() -> bool:
@@ -80,17 +80,25 @@ def _gh_headers():
 
 
 def _gh_ensure_branch():
-    import requests
+    import base64, requests
     _, repo, branch = _gh_conf()
     if requests.get(f"{_GH_API}/repos/{repo}/branches/{branch}",
                     headers=_gh_headers()).status_code == 200:
         return
     info = requests.get(f"{_GH_API}/repos/{repo}", headers=_gh_headers()).json()
     default = info.get("default_branch", "main")
-    ref = requests.get(f"{_GH_API}/repos/{repo}/git/ref/heads/{default}",
-                       headers=_gh_headers()).json()
-    requests.post(f"{_GH_API}/repos/{repo}/git/refs", headers=_gh_headers(),
-                  json={"ref": f"refs/heads/{branch}", "sha": ref["object"]["sha"]})
+    ref = requests.get(f"{_GH_API}/repos/{repo}/git/ref/heads/{default}", headers=_gh_headers())
+    if ref.status_code != 200:
+        # Empty repo (no commits) — create an initial commit on the default branch.
+        requests.put(f"{_GH_API}/repos/{repo}/contents/.init", headers=_gh_headers(),
+                     json={"message": "initialise data store",
+                           "content": base64.b64encode(b"cpai-marketing data store\n").decode()})
+        ref = requests.get(f"{_GH_API}/repos/{repo}/git/ref/heads/{default}", headers=_gh_headers())
+        if ref.status_code != 200:
+            return
+    if branch != default:
+        requests.post(f"{_GH_API}/repos/{repo}/git/refs", headers=_gh_headers(),
+                      json={"ref": f"refs/heads/{branch}", "sha": ref.json()["object"]["sha"]})
 
 
 def _gh_get(relpath: str):
