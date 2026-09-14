@@ -23,6 +23,12 @@ AUTH_PRE_AUTHORIZED          JSON list of emails invited to self-register but
                              who haven't set a password yet, e.g.
                              ["newhire@company.com"]. An email is removed from
                              this list the moment that person registers.
+AUTH_SECRET_ID               AWS Secrets Manager secret name/ARN holding
+                             AUTH_USERS and AUTH_PRE_AUTHORIZED as JSON keys.
+                             Set only on AWS deploys — when present, invites/
+                             registrations from "Manage access" are written
+                             back there (via boto3) instead of to .env, so
+                             they survive a container restart. Unset locally.
 """
 from __future__ import annotations
 
@@ -101,13 +107,9 @@ def auth_cookie_key() -> str:
 
 def set_auth_users(users: dict) -> None:
     """Persist an updated AUTH_USERS from the in-app "Manage access" page —
-    writes it to .env for local runs, and updates the running process so the
-    change takes effect immediately without a restart. On a cloud deploy where
-    AUTH_USERS comes from Streamlit secrets, this only updates the live
-    process; edit the deployment's secrets to make it stick across restarts."""
-    raw = json.dumps(users)
-    os.environ["AUTH_USERS"] = raw
-    _upsert_env_line("AUTH_USERS", raw)
+    updates the running process immediately, and durably either to .env
+    (local) or the AUTH_SECRET_ID secret (AWS), so it survives a restart."""
+    _persist_auth("AUTH_USERS", json.dumps(users))
 
 
 def pre_authorized_emails() -> list[str]:
@@ -122,9 +124,32 @@ def pre_authorized_emails() -> list[str]:
 
 
 def set_pre_authorized_emails(emails: list[str]) -> None:
-    raw = json.dumps(emails)
-    os.environ["AUTH_PRE_AUTHORIZED"] = raw
-    _upsert_env_line("AUTH_PRE_AUTHORIZED", raw)
+    _persist_auth("AUTH_PRE_AUTHORIZED", json.dumps(emails))
+
+
+def auth_secret_id() -> str | None:
+    return get("AUTH_SECRET_ID")
+
+
+def _persist_auth(key: str, raw: str) -> None:
+    os.environ[key] = raw
+    if auth_secret_id():
+        _secrets_manager_upsert(key, raw)
+    else:
+        _upsert_env_line(key, raw)
+
+
+def _secrets_manager_upsert(key: str, value: str) -> None:
+    """Merge one key into the AUTH_SECRET_ID JSON secret (AWS deploys)."""
+    import boto3
+    client = boto3.client("secretsmanager")
+    secret_id = auth_secret_id()
+    try:
+        current = json.loads(client.get_secret_value(SecretId=secret_id)["SecretString"])
+    except client.exceptions.ResourceNotFoundException:
+        current = {}
+    current[key] = value
+    client.put_secret_value(SecretId=secret_id, SecretString=json.dumps(current))
 
 
 def _upsert_env_line(key: str, value: str) -> None:
