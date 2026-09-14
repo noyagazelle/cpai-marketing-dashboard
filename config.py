@@ -7,10 +7,26 @@ Recognised settings
 GA4_PROPERTY_ID              numeric GA4 property id, e.g. 123456789
 GA4_SERVICE_ACCOUNT_JSON     path to the service-account key file
                              (or GOOGLE_APPLICATION_CREDENTIALS)
+GA4_SERVICE_ACCOUNT_INFO     service-account key JSON, given inline as either a
+                             Streamlit secrets table or a raw JSON-string env var
+                             (for container deploys with no local key file, e.g.
+                             the contents pulled from AWS Secrets Manager)
 ANTHROPIC_API_KEY            optional — enables the AI narrative layer
+AUTH_USERS                   per-user login credentials — a JSON string (or
+                             Streamlit secrets table) shaped like
+                             {"usernames": {"alice": {"name": "Alice",
+                             "password": "<bcrypt hash>"}}}. Leave unset to
+                             skip the login screen entirely (local dev).
+AUTH_COOKIE_KEY              signing key for the login session cookie —
+                             any random string, set once and keep stable.
+AUTH_PRE_AUTHORIZED          JSON list of emails invited to self-register but
+                             who haven't set a password yet, e.g.
+                             ["newhire@company.com"]. An email is removed from
+                             this list the moment that person registers.
 """
 from __future__ import annotations
 
+import json
 import os
 from datetime import date, timedelta
 from pathlib import Path
@@ -48,16 +64,80 @@ def ga4_credentials_path() -> str | None:
 
 
 def ga4_credentials_info() -> dict | None:
-    """Service-account JSON provided inline via secrets (for cloud deploys)."""
+    """Service-account JSON provided inline (for cloud deploys with no local key
+    file) — either a Streamlit secrets table, or a raw JSON string in the
+    GA4_SERVICE_ACCOUNT_INFO env var (e.g. injected from AWS Secrets Manager)."""
     val = _secret("GA4_SERVICE_ACCOUNT_INFO")
     if val:
         return dict(val)
+    raw = os.environ.get("GA4_SERVICE_ACCOUNT_INFO")
+    if raw:
+        return json.loads(raw)
     return None
 
 
 # --- Anthropic (optional, Milestone 5) ---
 def anthropic_key() -> str | None:
     return get("ANTHROPIC_API_KEY")
+
+
+# --- Per-user authentication ---
+def auth_users() -> dict | None:
+    """Login credentials for streamlit-authenticator, e.g.
+    {"usernames": {"alice": {"name": "Alice", "password": "<bcrypt hash>"}}}.
+    None means no login screen (local dev with nothing configured)."""
+    val = _secret("AUTH_USERS")
+    if val:
+        return dict(val)
+    raw = os.environ.get("AUTH_USERS")
+    if raw:
+        return json.loads(raw)
+    return None
+
+
+def auth_cookie_key() -> str:
+    return get("AUTH_COOKIE_KEY", "cpai-marketing-dashboard-dev-key")
+
+
+def set_auth_users(users: dict) -> None:
+    """Persist an updated AUTH_USERS from the in-app "Manage access" page —
+    writes it to .env for local runs, and updates the running process so the
+    change takes effect immediately without a restart. On a cloud deploy where
+    AUTH_USERS comes from Streamlit secrets, this only updates the live
+    process; edit the deployment's secrets to make it stick across restarts."""
+    raw = json.dumps(users)
+    os.environ["AUTH_USERS"] = raw
+    _upsert_env_line("AUTH_USERS", raw)
+
+
+def pre_authorized_emails() -> list[str]:
+    """Emails invited to self-register (see AUTH_PRE_AUTHORIZED)."""
+    val = _secret("AUTH_PRE_AUTHORIZED")
+    if val:
+        return list(val)
+    raw = os.environ.get("AUTH_PRE_AUTHORIZED")
+    if raw:
+        return json.loads(raw)
+    return []
+
+
+def set_pre_authorized_emails(emails: list[str]) -> None:
+    raw = json.dumps(emails)
+    os.environ["AUTH_PRE_AUTHORIZED"] = raw
+    _upsert_env_line("AUTH_PRE_AUTHORIZED", raw)
+
+
+def _upsert_env_line(key: str, value: str) -> None:
+    path = Path(__file__).parent / ".env"
+    lines = path.read_text().splitlines() if path.exists() else []
+    new_line = f"{key}={value}"
+    for i, line in enumerate(lines):
+        if line.startswith(f"{key}="):
+            lines[i] = new_line
+            break
+    else:
+        lines.append(new_line)
+    path.write_text("\n".join(lines) + "\n")
 
 
 # --- LinkedIn: true total follower count (not in the export files) ---

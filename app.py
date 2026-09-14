@@ -7,10 +7,10 @@ in st.session_state so every view sees them regardless of the active tab. GA4
 data lives in st.session_state['ga4_data']. On first load we seed the bundled
 sample data so the dashboard isn't empty.
 """
-import hmac
 from pathlib import Path
 
 import streamlit as st
+import streamlit_authenticator as stauth
 
 import branding as B
 import config
@@ -18,7 +18,8 @@ import history
 import loaders
 from connectors import ga4
 from views import (upload_view, executive_view, linkedin_view, ga4_view,
-                   cross_channel_view, audience_view, recommendations_view, appendix_view)
+                   cross_channel_view, audience_view, recommendations_view, appendix_view,
+                   admin_view)
 
 st.set_page_config(
     page_title=f"{B.COMPANY_NAME} — {B.DASHBOARD_TITLE}",
@@ -30,26 +31,49 @@ st.markdown(B.CUSTOM_CSS, unsafe_allow_html=True)
 
 
 # --------------------------------------------------------------------------- #
-# Password gate — active only when APP_PASSWORD is set (i.e. when deployed).
-# Runs server-side, so the password is never exposed to the browser.
+# Per-user login — active once someone is registered or invited. Each teammate
+# sets their OWN password by self-registering: an admin invites their email on
+# the "Manage access" tab, then they set up their account here on first visit.
+# Runs server-side via streamlit-authenticator.
 # --------------------------------------------------------------------------- #
-def _password_gate():
-    pw = config.get("APP_PASSWORD")
-    if not pw or st.session_state.get("_authed"):
-        return
+def _auth_gate():
+    users = config.auth_users() or {"usernames": {}}
+    pending = config.pre_authorized_emails()
+    if not users["usernames"] and not pending:
+        return None  # nothing configured yet — local dev, no login screen
+
+    authenticator = stauth.Authenticate(users, cookie_name="cpai_marketing_auth",
+                                         cookie_key=config.auth_cookie_key(),
+                                         cookie_expiry_days=7)
     st.markdown(f"## 🔒 {B.COMPANY_NAME} · Marketing Analytics")
-    st.caption("This dashboard is private. Enter the team password to continue.")
-    entered = st.text_input("Team password", type="password")
-    if entered:
-        if hmac.compare_digest(entered, str(pw)):
-            st.session_state["_authed"] = True
-            st.rerun()
+    authenticator.login()
+    status = st.session_state.get("authentication_status")
+
+    if status is not True:
+        if status is False:
+            st.error("Incorrect username or password.")
         else:
-            st.error("Incorrect password — try again.")
-    st.stop()
+            st.caption("This dashboard is private. Log in, or set up your account below if "
+                       "you've been invited.")
+        if pending:
+            with st.expander("New here? Set up your account"):
+                try:
+                    email, username, name = authenticator.register_user(
+                        pre_authorized=pending, captcha=False,
+                        fields={"Register": "Create account"},
+                    )
+                except stauth.RegisterError as e:
+                    st.error(str(e))
+                else:
+                    if email:
+                        config.set_auth_users(users)
+                        config.set_pre_authorized_emails(pending)
+                        st.success(f"Account created for {name} — log in above with your new password.")
+        st.stop()
+    return authenticator
 
 
-_password_gate()
+authenticator = _auth_gate()
 
 # On first load (or after a session/server reset), restore data durably:
 #   1) the last uploaded working set (survives resets), else
@@ -81,6 +105,9 @@ with st.sidebar:
         st.image(B.LOGO_PATH, width=180)
     st.markdown(f"### {B.DASHBOARD_TITLE}")
     st.caption("Load or update each period's data on the **Upload & connect** tab.")
+    if authenticator is not None:
+        st.caption(f"Logged in as **{st.session_state.get('name')}**")
+        authenticator.logout("Log out", "sidebar")
     st.divider()
     _d = st.session_state.get("li_data", {})
     st.markdown("**Loaded**")
@@ -96,10 +123,13 @@ with st.sidebar:
 # --------------------------------------------------------------------------- #
 st.title(f"{B.COMPANY_NAME} · Marketing Analytics")
 
+_pages = ["Upload & connect", "Executive summary", "LinkedIn deep dive", "Website (GA4)",
+          "Cross-channel", "Audience", "Recommendations", "Data & export"]
+if authenticator is not None:
+    _pages.append("Manage access")
+
 page = st.radio(
-    "Navigate",
-    ["Upload & connect", "Executive summary", "LinkedIn deep dive", "Website (GA4)",
-     "Cross-channel", "Audience", "Recommendations", "Data & export"],
+    "Navigate", _pages,
     index=0, horizontal=True, label_visibility="collapsed",
 )
 st.divider()
@@ -163,6 +193,8 @@ elif page == "Recommendations":
     recommendations_view.render(data, _ga4_data)
 elif page == "Data & export":
     appendix_view.render(data, _ga4_data, source_note)
+elif page == "Manage access":
+    admin_view.render(st.session_state.get("username"))
 
 st.divider()
 st.caption(

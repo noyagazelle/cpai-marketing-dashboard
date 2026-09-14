@@ -21,3 +21,6 @@ anthropic>=0.39
 
 # Config
 python-dotenv>=1.0
+
+# Per-user authentication (replaces the old single shared-password gate)
+streamlit-authenticator>=0.4,<0.5
