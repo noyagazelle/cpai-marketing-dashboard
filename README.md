@@ -136,41 +136,93 @@ You can get a key at <https://console.anthropic.com/> → **API Keys**.
 
 ---
 
+## Access control
+
+No one gets in until someone is registered — see `_auth_gate()` in `app.py`. Teammates set
+their **own** password; no admin ever types or sees it:
+
+1. An admin invites an email address — either `AUTH_PRE_AUTHORIZED` in `.env` (bootstrap, before
+   anyone can log in), or the **Manage access** tab once someone is already logged in.
+2. That person opens the app, expands **"New here? Set up your account,"** and picks their own
+   username + password.
+3. Their invite is consumed and their account (bcrypt-hashed password) is added to `AUTH_USERS`
+   automatically — nothing to hand-edit.
+
+Leave `AUTH_PRE_AUTHORIZED` and `AUTH_USERS` both unset to skip the login screen entirely
+(local dev, matches the behavior described throughout this README).
+
+---
+
 ## Configuration & security
 
 - All secrets live in `.env` (git-ignored) — never in source. `.env.example` shows the shape.
 - On Streamlit Cloud, use **Secrets** instead of `.env` (same key names; a service-account
   JSON can be pasted inline as `GA4_SERVICE_ACCOUNT_INFO`).
+- On the AWS deployment (see below), the same key names are passed as plain container
+  environment variables instead.
 - Branding (colors, logo, names) is all in `branding.py` — trivial to rebrand.
 
 ---
 
-## Deploying to Streamlit Community Cloud (optional)
+## Deploying on AWS (current production setup)
 
-Local use needs nothing more than the Quick start. To share it on the web:
+This app runs as a container on **AWS Lightsail** (chosen for cost/simplicity over ECS/App
+Runner — see project notes). No VPC, load balancer, or ECS cluster involved.
+
+### What's running
+- **Lightsail container service**: `marketing-dashboard` (region `us-east-1`, `nano` power,
+  ~$7/month). All resources below are tagged `project: marketing-dashboard`.
+- **S3 bucket**: `marketing-dashboard-history-<account-id>` — durable storage for uploaded
+  LinkedIn periods (`history.py`'s S3 backend), since the container's local disk is wiped on
+  every redeploy.
+- **IAM user**: `marketing-dashboard-app` — scoped to only `GetObject`/`PutObject`/
+  `DeleteObject`/`ListBucket` on that one bucket. Its access key is passed to the container as
+  `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY` env vars (Lightsail containers have no IAM role
+  support, unlike ECS).
+
+### Redeploying after a code change
+```bash
+docker build --platform linux/amd64 -t cpai-dashboard:latest .
+aws lightsail push-container-image --service-name marketing-dashboard --label app \
+  --image cpai-dashboard:latest --region us-east-1
+# note the returned image tag, e.g. ":marketing-dashboard.app.3", then:
+aws lightsail create-container-service-deployment --region us-east-1 --cli-input-json '{
+  "serviceName": "marketing-dashboard",
+  "containers": {"app": {
+    "image": ":marketing-dashboard.app.3",
+    "ports": {"8501": "HTTP"},
+    "environment": { "...": "carry forward every existing env var here — a deployment replaces the full env, it does not merge" }
+  }},
+  "publicEndpoint": {"containerName": "app", "containerPort": 8501,
+    "healthCheck": {"path": "/", "successCodes": "200-499"}}
+}'
+```
+Always fetch the current env vars first (`aws lightsail get-container-services --service-name
+marketing-dashboard --region us-east-1`) and carry them all forward — a deployment replaces the
+entire environment, it doesn't merge with the previous one.
+
+### A known limitation worth knowing
+`AUTH_USERS`/`AUTH_PRE_AUTHORIZED` are plain env vars on the deployment, not backed by Secrets
+Manager. That means invites/registrations made through **Manage access** live only in the
+running container's memory — a redeploy resets them to whatever's in the deployment spec above.
+For a small team this is an acceptable, low-friction trade-off (just copy the current
+`AUTH_USERS` value into the next deployment's env vars if it's changed) rather than adding an
+IAM-credential round-trip to Secrets Manager purely for auth state. `config.py` already supports
+that upgrade path (`AUTH_SECRET_ID`) if this ever becomes worth doing.
+
+---
+
+## Deploying to Streamlit Community Cloud (alternative)
+
+If you'd rather not run this on AWS, Streamlit's own hosting is simpler for local-only teams:
 
 1. **Put the project in a Git repo** (private is fine). It's already git-initialised with a
    `.gitignore` that excludes `.env` and any key files — never commit secrets.
-   ```bash
-   cd ~/cpai-marketing-dashboard
-   git add -A && git commit -m "Marketing analytics dashboard"
-   # then create a repo on GitHub and push (gh repo create ... or via the GitHub UI)
-   ```
 2. Go to <https://share.streamlit.io> → **New app** → pick the repo → main file `app.py`.
-3. **Add secrets** (App → Settings → **Secrets**) instead of a `.env`. Use the same names:
-   ```toml
-   GA4_PROPERTY_ID = "123456789"
-   ANTHROPIC_API_KEY = "sk-ant-..."   # optional
-   # Paste the service-account JSON inline for a live GA4 connection on the cloud:
-   [GA4_SERVICE_ACCOUNT_INFO]
-   type = "service_account"
-   project_id = "..."
-   private_key = "-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----\n"
-   client_email = "cpai-ga4-reader@your-project.iam.gserviceaccount.com"
-   # ...the remaining fields from the downloaded JSON...
-   ```
-4. Deploy. The iCloud caveat doesn't apply in the cloud. Analysts can then just visit the URL
-   and use the **Upload & connect** tab each quarter — no local install.
+3. **Add secrets** (App → Settings → **Secrets**) instead of a `.env`. Use the same key names
+   as `.env.example`, including `AUTH_PRE_AUTHORIZED`/`AUTH_USERS` for login and
+   `GCS_BUCKET` (not `S3_BUCKET`) for persistent history storage on that platform.
+4. Deploy. The iCloud caveat doesn't apply in the cloud.
 
 ---
 

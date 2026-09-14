@@ -30,14 +30,35 @@ only *phrases* those verified numbers.
 Uploading new files replaces the working set and recomputes everything automatically.
 
 ## Credentials (never commit these)
-Set in `.env` locally (copy `.env.example`), or in Streamlit Cloud **Secrets**:
+Set in `.env` locally (copy `.env.example`), or as container env vars / Streamlit Cloud
+**Secrets** when deployed:
 - `GA4_PROPERTY_ID` — numeric GA4 property id.
 - `GA4_SERVICE_ACCOUNT_JSON` — path to the service-account key file (local), or
-  `GA4_SERVICE_ACCOUNT_INFO` inline in cloud secrets.
+  `GA4_SERVICE_ACCOUNT_INFO` inline in cloud secrets/env vars.
 - `ANTHROPIC_API_KEY` — optional; enables the AI-written analysis. Without it, a rule-based
   narrative is used. Get one at <https://console.anthropic.com>.
+- `AUTH_PRE_AUTHORIZED` / `AUTH_USERS` — login. Invite emails via the first, people register
+  their own password via the app, the second fills in automatically. See README → *Access
+  control*.
 
 GA4 setup is a one-time task — full step-by-step in `README.md` → *GA4 setup*.
+
+## Live deployment (AWS)
+This app is deployed on **AWS Lightsail**, account `706124985445`, region `us-east-1`.
+Everything is tagged `project: marketing-dashboard`. The Lightsail service and S3 bucket are
+findable via the tagging API (IAM resources aren't covered by it, so check those separately):
+```bash
+aws resourcegroupstaggingapi get-resources --tag-filters Key=project,Values=marketing-dashboard
+aws iam list-user-tags --user-name marketing-dashboard-app   # confirms the IAM user's tag
+```
+- **Lightsail container service**: `marketing-dashboard` — the running app.
+- **S3 bucket**: `marketing-dashboard-history-706124985445` — durable LinkedIn upload history
+  (survives redeploys; local disk inside the container does not).
+- **IAM user**: `marketing-dashboard-app` — scoped to only that one bucket; its access key is
+  passed to the container as env vars (Lightsail has no IAM roles, unlike ECS).
+
+Redeploy steps and the auth-persistence caveat (invites reset on redeploy — copy `AUTH_USERS`
+forward manually) are in `README.md` → *Deploying on AWS*.
 
 ## Rebranding
 Everything visual is in **`branding.py`** (palette, logo path, names) plus
