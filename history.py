@@ -4,6 +4,8 @@ compare the current period against previous ones (true period-over-period).
 
 Storage backend is automatic:
   * Local disk (history/<key>/<kind>.<ext>) when running on your machine.
+  * Amazon S3 (s3://<S3_BUCKET>/history/...) when S3_BUCKET is set — used on
+    AWS container deploys, where the local filesystem is wiped on restart.
   * Google Cloud Storage (gs://<GCS_BUCKET>/history/...) when GCS_BUCKET is set —
     used on Streamlit Cloud, where the local filesystem is wiped on restart.
 
@@ -29,10 +31,25 @@ _CURRENT = "_current"
 # --------------------------------------------------------------------------- #
 # Storage backend — picked automatically:
 #   * GitHub repo (data branch) when GITHUB_TOKEN + GITHUB_REPO are set
+#   * Amazon S3 when S3_BUCKET is set
 #   * Google Cloud Storage when GCS_BUCKET is set
 #   * local disk otherwise (default on your own machine)
 # All four primitives below (_write/_read/_list/_delete) dispatch on the backend.
 # --------------------------------------------------------------------------- #
+
+# ---- Amazon S3 ----
+def _s3_bucket_name() -> Optional[str]:
+    return config.get("S3_BUCKET")
+
+
+def _use_s3() -> bool:
+    return bool(_s3_bucket_name())
+
+
+def _s3_client():
+    import boto3
+    return boto3.client("s3")
+
 
 # ---- Google Cloud Storage ----
 def _bucket_name() -> Optional[str]:
@@ -142,6 +159,8 @@ def _write_bytes(relpath: str, blob: bytes):
         requests.put(f"{_GH_API}/repos/{repo}/contents/history/{relpath}",
                      headers=_gh_headers(), json=payload)
         _gh_tree_cache["tree"] = None
+    elif _use_s3():
+        _s3_client().put_object(Bucket=_s3_bucket_name(), Key=f"history/{relpath}", Body=blob)
     elif _use_gcs():
         _gcs_bucket().blob(f"history/{relpath}").upload_from_string(blob)
     else:
@@ -153,6 +172,12 @@ def _write_bytes(relpath: str, blob: bytes):
 def _read_bytes(relpath: str) -> Optional[bytes]:
     if _use_github():
         return _gh_get(relpath)[0]
+    if _use_s3():
+        client = _s3_client()
+        try:
+            return client.get_object(Bucket=_s3_bucket_name(), Key=f"history/{relpath}")["Body"].read()
+        except client.exceptions.NoSuchKey:
+            return None
     if _use_gcs():
         b = _gcs_bucket().blob(f"history/{relpath}")
         return b.download_as_bytes() if b.exists() else None
@@ -165,6 +190,13 @@ def _list_paths(prefix: str) -> list[str]:
     if _use_github():
         pre = f"history/{prefix}"
         return [p[len("history/"):] for p in _gh_tree() if p.startswith(pre)]
+    if _use_s3():
+        client = _s3_client()
+        paginator = client.get_paginator("list_objects_v2")
+        paths = []
+        for page in paginator.paginate(Bucket=_s3_bucket_name(), Prefix=f"history/{prefix}"):
+            paths.extend(o["Key"][len("history/"):] for o in page.get("Contents", []))
+        return paths
     if _use_gcs():
         it = _gcs_bucket().list_blobs(prefix=f"history/{prefix}")
         return [b.name[len("history/"):] for b in it if not b.name.endswith("/")]
@@ -186,6 +218,12 @@ def _delete_prefix(prefix: str):
                                  headers=_gh_headers(),
                                  json={"message": f"data: delete {rel}", "sha": sha, "branch": branch})
         _gh_tree_cache["tree"] = None
+    elif _use_s3():
+        keys = _list_paths(prefix)
+        if keys:
+            client = _s3_client()
+            client.delete_objects(Bucket=_s3_bucket_name(),
+                                  Delete={"Objects": [{"Key": f"history/{k}"} for k in keys]})
     elif _use_gcs():
         for b in _gcs_bucket().list_blobs(prefix=f"history/{prefix}"):
             b.delete()
