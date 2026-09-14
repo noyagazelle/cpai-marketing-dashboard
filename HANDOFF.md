@@ -53,7 +53,9 @@ aws iam list-user-tags --user-name marketing-dashboard-app   # confirms the IAM 
 ```
 - **Lightsail container service**: `marketing-dashboard` — the running app.
 - **S3 bucket**: `marketing-dashboard-history-706124985445` — durable LinkedIn upload history
-  (survives redeploys; local disk inside the container does not).
+  (survives redeploys; local disk inside the container does not). Versioning is on (protects
+  against an accidental overwrite/delete), with a lifecycle rule expiring old versions after 90
+  days so this never accumulates real storage cost.
 - **IAM user**: `marketing-dashboard-app` — scoped to only that one bucket; its access key is
   passed to the container as env vars (Lightsail has no IAM roles, unlike ECS).
 
