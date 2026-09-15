@@ -87,6 +87,13 @@ def anthropic_key() -> str | None:
     return get("ANTHROPIC_API_KEY")
 
 
+def bedrock_model() -> str | None:
+    """Bedrock inference-profile id, e.g. 'us.anthropic.claude-sonnet-4-6'. When
+    set, the AI narrative uses Bedrock (IAM-authenticated, no API key) instead
+    of a direct Anthropic API key."""
+    return get("BEDROCK_MODEL_ID")
+
+
 # --- Per-user authentication ---
 def auth_users() -> dict | None:
     """Login credentials for streamlit-authenticator, e.g.

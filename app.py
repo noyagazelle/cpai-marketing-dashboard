@@ -46,7 +46,14 @@ def _auth_gate():
                                          cookie_key=config.auth_cookie_key(),
                                          cookie_expiry_days=7)
     st.markdown(f"## 🔒 {B.COMPANY_NAME} · Marketing Analytics")
-    authenticator.login()
+    try:
+        authenticator.login()
+    except stauth.LoginError:
+        # A browser cookie references a user that no longer exists in AUTH_USERS
+        # (e.g. auth state was reset by a redeploy) — clear it and show a fresh
+        # login screen instead of crashing.
+        authenticator.cookie_controller.delete_cookie()
+        st.rerun()
     status = st.session_state.get("authentication_status")
 
     if status is not True:

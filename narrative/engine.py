@@ -170,14 +170,18 @@ def recommendations(data: dict, ga4=None, merged: pd.DataFrame | None = None,
 # Written analysis (AI or rule-based)
 # --------------------------------------------------------------------------- #
 def ai_status() -> dict:
-    key = config.anthropic_key()
     try:
         import anthropic  # noqa: F401
         installed = True
     except Exception:
         installed = False
-    return {"available": bool(key) and installed, "has_key": bool(key), "installed": installed,
-            "model": config.get("ANTHROPIC_MODEL", "claude-sonnet-4-6")}
+    bedrock_model = config.bedrock_model()
+    if bedrock_model:
+        return {"available": installed, "provider": "bedrock", "installed": installed,
+                "model": bedrock_model}
+    key = config.anthropic_key()
+    return {"available": bool(key) and installed, "provider": "anthropic", "has_key": bool(key),
+            "installed": installed, "model": config.get("ANTHROPIC_MODEL", "claude-sonnet-4-6")}
 
 
 def _strip_md(s: str) -> str:
@@ -210,9 +214,13 @@ _AI_SYSTEM = (
 )
 
 
-def _ai_narrative(facts: str, model: str) -> str:
-    import anthropic
-    client = anthropic.Anthropic(api_key=config.anthropic_key())
+def _ai_narrative(facts: str, model: str, provider: str) -> str:
+    if provider == "bedrock":
+        from anthropic import AnthropicBedrock
+        client = AnthropicBedrock(aws_region=config.get("AWS_DEFAULT_REGION", "us-east-1"))
+    else:
+        import anthropic
+        client = anthropic.Anthropic(api_key=config.anthropic_key())
     msg = client.messages.create(
         model=model, max_tokens=700, system=_AI_SYSTEM,
         messages=[{"role": "user", "content":
@@ -260,7 +268,7 @@ def write_analysis(kpis: list[dict], takeaways: list[dict], recs: list[dict],
     st = ai_status()
     if prefer_ai and st["available"]:
         try:
-            text = _ai_narrative(_facts_block(kpis, takeaways, recs), st["model"])
+            text = _ai_narrative(_facts_block(kpis, takeaways, recs), st["model"], st["provider"])
             if text:
                 return {"text": text, "mode": "ai", "error": None, "model": st["model"]}
         except Exception as e:

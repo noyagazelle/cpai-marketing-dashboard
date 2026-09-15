@@ -63,7 +63,7 @@ def render(data: dict, ga4=None):
     else:
         c1.markdown('<span class="cpai-pill off">✎ Rule-based</span> '
                     f'<span style="color:{B.MUTED};font-size:0.8rem;">'
-                    'add ANTHROPIC_API_KEY to .env for AI-written prose</span>',
+                    'add ANTHROPIC_API_KEY (or BEDROCK_MODEL_ID) to .env for AI-written prose</span>',
                     unsafe_allow_html=True)
         narr = N.write_analysis(kpis, tks, recs, prefer_ai=False)
 
