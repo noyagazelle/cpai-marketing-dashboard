@@ -56,8 +56,16 @@ aws iam list-user-tags --user-name marketing-dashboard-app   # confirms the IAM 
   (survives redeploys; local disk inside the container does not). Versioning is on (protects
   against an accidental overwrite/delete), with a lifecycle rule expiring old versions after 90
   days so this never accumulates real storage cost.
-- **IAM user**: `marketing-dashboard-app` — scoped to only that one bucket; its access key is
-  passed to the container as env vars (Lightsail has no IAM roles, unlike ECS).
+- **IAM user**: `marketing-dashboard-app` — scoped to only that one bucket (plus Bedrock invoke
+  below); its access key is passed to the container as env vars (Lightsail has no IAM roles,
+  unlike ECS).
+- **Bedrock application inference profile**: `marketing-dashboard` (Claude Sonnet 4.6) — powers
+  the AI-written executive narrative; used via `BEDROCK_MODEL_ID` instead of a direct Anthropic
+  API key.
+- **Budget alert**: `marketing-dashboard`, $25/month threshold, filtered to this project's
+  tagged spend only — emails `sefi.c@cyberpro-ai.com` at 80% actual and 100% forecasted.
+- **Resource group**: `marketing-dashboard` — one console view of every taggable resource above
+  (AWS console → Resource Groups & Tag Editor → Saved Resource Groups).
 
 Redeploy steps and the auth-persistence caveat (invites reset on redeploy — copy `AUTH_USERS`
 forward manually) are in `README.md` → *Deploying on AWS*.

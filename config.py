@@ -25,15 +25,20 @@ AUTH_PRE_AUTHORIZED          JSON list of emails invited to self-register but
                              this list the moment that person registers.
 AUTH_SECRET_ID               AWS Secrets Manager secret name/ARN holding
                              AUTH_USERS and AUTH_PRE_AUTHORIZED as JSON keys.
-                             Set only on AWS deploys — when present, invites/
-                             registrations from "Manage access" are written
-                             back there (via boto3) instead of to .env, so
-                             they survive a container restart. Unset locally.
+                             Set only on AWS deploys. When present, auth state
+                             is read live from this secret (short-TTL cached,
+                             not just read once at boot) instead of from
+                             AUTH_USERS/AUTH_PRE_AUTHORIZED env vars — so
+                             invites/registrations survive any redeploy, and
+                             an edit made directly in Secrets Manager (e.g. a
+                             bootstrap invite before anyone's registered) takes
+                             effect within seconds, no restart needed.
 """
 from __future__ import annotations
 
 import json
 import os
+import time
 from datetime import date, timedelta
 from pathlib import Path
 
@@ -99,6 +104,9 @@ def auth_users() -> dict | None:
     """Login credentials for streamlit-authenticator, e.g.
     {"usernames": {"alice": {"name": "Alice", "password": "<bcrypt hash>"}}}.
     None means no login screen (local dev with nothing configured)."""
+    if auth_secret_id():
+        raw = _secrets_manager_fetch().get("AUTH_USERS")
+        return json.loads(raw) if raw else None
     val = _secret("AUTH_USERS")
     if val:
         return dict(val)
@@ -121,6 +129,9 @@ def set_auth_users(users: dict) -> None:
 
 def pre_authorized_emails() -> list[str]:
     """Emails invited to self-register (see AUTH_PRE_AUTHORIZED)."""
+    if auth_secret_id():
+        raw = _secrets_manager_fetch().get("AUTH_PRE_AUTHORIZED")
+        return json.loads(raw) if raw else []
     val = _secret("AUTH_PRE_AUTHORIZED")
     if val:
         return list(val)
@@ -139,11 +150,30 @@ def auth_secret_id() -> str | None:
 
 
 def _persist_auth(key: str, raw: str) -> None:
-    os.environ[key] = raw
     if auth_secret_id():
         _secrets_manager_upsert(key, raw)
     else:
+        os.environ[key] = raw
         _upsert_env_line(key, raw)
+
+
+_auth_secret_cache: dict = {"ts": 0.0, "data": None}
+_AUTH_SECRET_TTL = 10  # seconds — short enough that a console edit is picked up quickly
+
+
+def _secrets_manager_fetch() -> dict:
+    """Current contents of the AUTH_SECRET_ID secret, cached briefly so every
+    Streamlit rerun doesn't hit Secrets Manager on every click."""
+    if _auth_secret_cache["data"] is not None and time.time() - _auth_secret_cache["ts"] < _AUTH_SECRET_TTL:
+        return _auth_secret_cache["data"]
+    import boto3
+    client = boto3.client("secretsmanager")
+    try:
+        current = json.loads(client.get_secret_value(SecretId=auth_secret_id())["SecretString"])
+    except client.exceptions.ResourceNotFoundException:
+        current = {}
+    _auth_secret_cache.update(ts=time.time(), data=current)
+    return current
 
 
 def _secrets_manager_upsert(key: str, value: str) -> None:
@@ -157,6 +187,7 @@ def _secrets_manager_upsert(key: str, value: str) -> None:
         current = {}
     current[key] = value
     client.put_secret_value(SecretId=secret_id, SecretString=json.dumps(current))
+    _auth_secret_cache.update(ts=time.time(), data=current)  # keep this process's view instant
 
 
 def _upsert_env_line(key: str, value: str) -> None:
