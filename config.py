@@ -120,6 +120,22 @@ def auth_cookie_key() -> str:
     return get("AUTH_COOKIE_KEY", "cpai-marketing-dashboard-dev-key")
 
 
+def auth_admins() -> list[str]:
+    """Emails allowed to see/use "Manage access" (invite or remove people).
+    Everyone else can still log in and use the dashboard, just not invite
+    others. Empty means nobody sees the tab — set this explicitly."""
+    if auth_secret_id():
+        raw = _secrets_manager_fetch().get("AUTH_ADMINS")
+        return json.loads(raw) if raw else []
+    val = _secret("AUTH_ADMINS")
+    if val:
+        return list(val)
+    raw = os.environ.get("AUTH_ADMINS")
+    if raw:
+        return json.loads(raw)
+    return []
+
+
 def set_auth_users(users: dict) -> None:
     """Persist an updated AUTH_USERS from the in-app "Manage access" page —
     updates the running process immediately, and durably either to .env

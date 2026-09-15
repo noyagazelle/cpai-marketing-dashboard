@@ -132,7 +132,7 @@ st.title(f"{B.COMPANY_NAME} · Marketing Analytics")
 
 _pages = ["Upload & connect", "Executive summary", "LinkedIn deep dive", "Website (GA4)",
           "Cross-channel", "Audience", "Recommendations", "Data & export"]
-if authenticator is not None:
+if authenticator is not None and st.session_state.get("email") in config.auth_admins():
     _pages.append("Manage access")
 
 page = st.radio(
