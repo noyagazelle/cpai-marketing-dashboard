@@ -66,6 +66,38 @@ def note(text: str, kind: str = "info"):
     st.caption(f"{icons.get(kind, 'ℹ️')} {text}")
 
 
+def _fmt_change(r) -> str:
+    pct = r["% change"]
+    pct_txt = f" ({pct:+.0%})" if pct is not None and pct == pct else (" (new)" if r["Change"] > 0 else "")
+    return f"{r['Trend'].split()[0]} {r['Change']:+,.0f}{pct_txt}"
+
+
+def change_table(df, prev_label: str = "", compact: bool = False):
+    """Render a per-category period-over-period table (from analysis.compare.change_table)
+    with ▲ green / ▼ red / = grey. `compact` drops the Previous column for narrow layouts."""
+    if df is None or df.empty:
+        return
+    label_c = df.columns[0]
+    show = df.copy()
+    show["Change"] = show.apply(_fmt_change, axis=1)
+    prev_col = f"Previous ({prev_label})" if prev_label else "Previous"
+    show = show.rename(columns={"Previous": prev_col})
+    show = show[[label_c, "Now", "Change"] if compact else [label_c, "Now", prev_col, "Change"]]
+
+    def _color(v):
+        s = str(v)
+        if s.startswith("▲"):
+            return f"color: {B.GOOD}; font-weight: 600"
+        if s.startswith("▼"):
+            return f"color: {B.BAD}; font-weight: 600"
+        return f"color: {B.MUTED}"
+
+    st.dataframe(
+        show.style.map(_color, subset=["Change"]).format({"Now": "{:,.0f}", prev_col: "{:,.0f}"}),
+        use_container_width=True, hide_index=True,
+    )
+
+
 def takeaway(text: str, tone: str = "neutral"):
     """Render a prioritized takeaway as a colored left-border callout."""
     color = {"good": B.GOOD, "bad": B.BAD, "neutral": B.CYAN}.get(tone, B.CYAN)

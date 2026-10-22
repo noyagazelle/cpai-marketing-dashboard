@@ -7,7 +7,9 @@ import streamlit as st
 import charts
 import config
 import glossary as GL
+import loaders
 import ui
+from analysis import compare as C
 from analysis import linkedin as L
 
 _DEMO_TITLES = {
@@ -43,7 +45,12 @@ def _split_context(split: dict) -> tuple:
     return split["delta"], f"last {d}d vs prior {d}d"
 
 
-def _demographics_block(res, title: str):
+def _period_label(prev_data: dict) -> str:
+    pp = loaders.linkedin_period(prev_data or {})
+    return f"{pp[0]:%b %d} → {pp[1]:%b %d}" if pp else ""
+
+
+def _demographics_block(res, title: str, prev_res=None, prev_label: str = ""):
     if not res.demographics:
         return
     st.markdown(f"#### {title}")
@@ -58,6 +65,17 @@ def _demographics_block(res, title: str):
             label_c, val_c = df.columns[0], df.columns[1]
             fig = charts.hbars(df[label_c][::-1], df[val_c][::-1], percent=False)
             st.plotly_chart(fig, use_container_width=True)
+            ex = C.excluded_note(res, prev_res, name)
+            if ex:
+                st.caption(f"ℹ️ Not shown (not relevant to our target audience): {ex}.")
+            chg = C.demographic_change(res, prev_res, name, top=10)
+            if chg is not None:
+                st.markdown(f"**Change vs previous period** ({prev_label})" if prev_label
+                            else "**Change vs previous period**")
+                ui.change_table(chg, prev_label)
+            else:
+                st.caption("Upload an earlier period to see whether each group grew, shrank, "
+                           "or stayed the same.")
 
 
 # --------------------------------------------------------------------------- #
@@ -125,7 +143,8 @@ def render(data: dict, prev_data: dict | None = None):
                 if f["sponsored"] in (0, None):
                     ui.note("All growth was **organic** this period — no paid follower spend detected.")
 
-            _demographics_block(followers, "Who follows CyberproAI")
+            _demographics_block(followers, "Who follows CyberproAI", prev_followers,
+                                _period_label(prev_data))
         st.divider()
 
     # ===================================================================== #
@@ -198,6 +217,29 @@ def render(data: dict, prev_data: dict | None = None):
                 ct2.caption(
                     f"Cadence: **{cad['n_posts']} posts** over {cad['span_days']} days "
                     f"(~{cad['per_week']}/week). Small sample — read weekday patterns as directional.")
+
+            # Posting cadence vs the previous saved period (real past content export)
+            st.markdown("#### Posting cadence vs previous period")
+            cc = C.cadence_change(content, prev_content)
+            if cc:
+                prev_label = _period_label(prev_data)
+                p1, p2, p3 = st.columns(3)
+                ui.kpi(p1, "Posts this period", ui.fmt_int(cc["posts_now"]), cc["posts_delta"],
+                       f"vs {cc['posts_prev']} previous period")
+                ui.kpi(p2, "Posts / week", f"{cc['per_week_now']:.1f}", cc["per_week_delta"],
+                       f"vs {cc['per_week_prev']:.1f} previous period")
+                diff = cc["per_week_now"] - cc["per_week_prev"]
+                verdict = ("Posting **more** often" if diff > 0.05 else
+                           "Posting **less** often" if diff < -0.05 else "Posting at the **same** pace")
+                ui.kpi(p3, "Verdict", verdict.replace("**", ""),
+                       context=f"than {prev_label}" if prev_label else "than previous period")
+                st.caption("Posts / week accounts for periods of different lengths. "
+                           f"Compared against the content export saved for {prev_label or 'the previous period'}.")
+                st.markdown("**Posts by weekday — change vs previous period**")
+                ui.change_table(cc["by_weekday"], prev_label)
+            else:
+                st.caption("Upload the Content export for an earlier period to compare posting "
+                           "cadence (are we posting more, less, or the same?).")
         st.divider()
 
     # ===================================================================== #
@@ -234,4 +276,5 @@ def render(data: dict, prev_data: dict | None = None):
                         charts.donut(list(secs.keys()), list(secs.values()),
                                      title="Page views by section"),
                         use_container_width=True)
-            _demographics_block(visitors, "Who visits the page")
+            _demographics_block(visitors, "Who visits the page", prev_visitors,
+                                _period_label(prev_data))

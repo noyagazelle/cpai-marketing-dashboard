@@ -83,22 +83,23 @@ def _auth_gate():
 authenticator = _auth_gate()
 
 # On first load (or after a session/server reset), restore data durably:
-#   1) the last uploaded working set (survives resets), else
-#   2) the most recent saved period, else
+#   1) the most recent saved period (so every visit opens on the latest data,
+#      auto-compared against the period before it), else
+#   2) the last uploaded working set (an upload whose dates weren't detected), else
 #   3) bundled sample data.
 if "li_data" not in st.session_state:
-    _current = history.load_current()
-    if _current:
-        st.session_state["li_data"] = _current
-        _p = loaders.linkedin_period(_current)
-        st.session_state["li_source"] = (f"your uploaded files ({_p[0]:%b %d} → {_p[1]:%b %d, %Y})"
-                                          if _p else "your uploaded files")
+    _periods = history.list_periods()
+    if _periods:
+        _latest = _periods[-1]
+        st.session_state["li_data"] = history.load_period(_latest["key"])
+        st.session_state["li_source"] = f"saved period {_latest['start']} → {_latest['end']}"
     else:
-        _periods = history.list_periods()
-        if _periods:
-            _latest = _periods[-1]
-            st.session_state["li_data"] = history.load_period(_latest["key"])
-            st.session_state["li_source"] = f"saved period {_latest['start']} → {_latest['end']}"
+        _current = history.load_current()
+        if _current:
+            st.session_state["li_data"] = _current
+            _p = loaders.linkedin_period(_current)
+            st.session_state["li_source"] = (f"your uploaded files ({_p[0]:%b %d} → {_p[1]:%b %d, %Y})"
+                                              if _p else "your uploaded files")
         else:
             st.session_state["li_data"] = loaders.load_samples()
             st.session_state["li_source"] = "bundled sample data (June 2026)"
@@ -195,7 +196,7 @@ elif page == "Website (GA4)":
 elif page == "Cross-channel":
     cross_channel_view.render(data, _ga4_data)
 elif page == "Audience":
-    audience_view.render(data, _ga4_data)
+    audience_view.render(data, _ga4_data, prev_data)
 elif page == "Recommendations":
     recommendations_view.render(data, _ga4_data)
 elif page == "Data & export":

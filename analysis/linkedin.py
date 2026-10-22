@@ -297,14 +297,56 @@ def visitors_summary(res, prev_res=None) -> Optional[dict]:
 # --------------------------------------------------------------------------- #
 # Demographics (shared shape: label column + value column)
 # --------------------------------------------------------------------------- #
-def demographic_table(res, name: str, top: int = 10) -> Optional[pd.DataFrame]:
+# Demographic groups hidden from every chart/table because they aren't relevant
+# to the audience this dashboard is about. Matched case-insensitively as a
+# substring of the label. Their numbers are still shown in a small note
+# (see excluded_rows) so they aren't silently lost.
+EXCLUDED_GROUPS = {
+    "Location": ("bogotá", "bogota"),
+}
+
+
+def _is_excluded(name: str, labels: pd.Series) -> pd.Series:
+    needles = EXCLUDED_GROUPS.get(name, ())
+    low = labels.astype(str).str.lower()
+    mask = pd.Series(False, index=labels.index)
+    for n in needles:
+        mask |= low.str.contains(n, regex=False)
+    return mask
+
+
+def _demo_values(res, name: str) -> Optional[pd.DataFrame]:
     d = res.demographics.get(name)
     if d is None or d.empty:
         return None
     label_c, val_c = d.columns[0], d.columns[-1]
     out = d[[label_c, val_c]].copy()
     out[val_c] = pd.to_numeric(out[val_c], errors="coerce")
-    out = out.dropna(subset=[val_c]).sort_values(val_c, ascending=False)
+    return out.dropna(subset=[val_c])
+
+
+def excluded_rows(res, name: str) -> Optional[pd.DataFrame]:
+    """The groups EXCLUDED_GROUPS hides for this demographic: [label, value,
+    share of ALL (incl. excluded)]. None when nothing is excluded."""
+    out = _demo_values(res, name)
+    if out is None:
+        return None
+    mask = _is_excluded(name, out.iloc[:, 0])
+    if not mask.any():
+        return None
+    total = out.iloc[:, 1].sum()
+    ex = out[mask].copy()
+    ex["share"] = ex.iloc[:, 1] / total if total else 0
+    return ex.reset_index(drop=True)
+
+
+def demographic_table(res, name: str, top: int = 10) -> Optional[pd.DataFrame]:
+    out = _demo_values(res, name)
+    if out is None:
+        return None
+    label_c, val_c = out.columns[0], out.columns[1]
+    out = out[~_is_excluded(name, out[label_c])]
+    out = out.sort_values(val_c, ascending=False)
     total = out[val_c].sum()
     out["share"] = out[val_c] / total if total else 0
     return out.head(top).reset_index(drop=True)

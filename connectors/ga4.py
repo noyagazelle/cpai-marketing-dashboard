@@ -39,6 +39,9 @@ class GA4Data:
     by_source_medium: Optional[pd.DataFrame] = None
     landing_pages: Optional[pd.DataFrame] = None
     landing_sources: Optional[pd.DataFrame] = None  # page × channel (where visitors arrived from)
+    prev_landing_sources: Optional[pd.DataFrame] = None  # same, for the previous window
+    prev_start: Optional[date] = None
+    prev_end: Optional[date] = None
     top_pages: Optional[pd.DataFrame] = None
     by_country: Optional[pd.DataFrame] = None
     by_device: Optional[pd.DataFrame] = None
@@ -133,7 +136,7 @@ def fetch(start: date, end: date, prev_start: date, prev_end: date) -> GA4Data:
         raise RuntimeError("GA4_PROPERTY_ID not set.")
     client = _client()
 
-    data = GA4Data(source="api", start=start, end=end)
+    data = GA4Data(source="api", start=start, end=end, prev_start=prev_start, prev_end=prev_end)
     data.timeseries = _run(client, pid, ["date"], TS_METRICS, start, end)
     data.by_channel = _run(client, pid, ["sessionDefaultChannelGroup"],
                            ["sessions", "totalUsers", "engagementRate", "keyEvents"], start, end)
@@ -162,4 +165,9 @@ def fetch(start: date, end: date, prev_start: date, prev_end: date) -> GA4Data:
         data.prev_totals = _totals(client, pid, prev_start, prev_end)
     except Exception as e:
         data.warnings.append(f"Could not fetch previous-period totals: {e}")
+    try:
+        data.prev_landing_sources = _run(client, pid, ["landingPage", "sessionDefaultChannelGroup"],
+                                         ["sessions", "keyEvents"], prev_start, prev_end)
+    except Exception as e:
+        data.warnings.append(f"Could not fetch previous-period traffic sources: {e}")
     return data

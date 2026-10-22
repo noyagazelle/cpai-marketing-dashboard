@@ -9,6 +9,7 @@ import config
 import glossary as GL
 import loaders
 import ui
+from analysis import compare as C
 from analysis import ga4 as A
 from connectors import ga4 as GA4
 
@@ -111,6 +112,23 @@ def _render_report(data):
                 charts.hbars(sub[chcol][::-1], sub["sessions"][::-1],
                              title=f"How people reached {sel}"),
                 use_container_width=True)
+
+            # Per-channel change vs the previous window (live GA4 only)
+            pls = getattr(data, "prev_landing_sources", None)
+            if pls is not None and not pls.empty and pagecol in pls.columns:
+                prev_sub = pls[pls[pagecol] == sel]
+                prev_label = (f"{data.prev_start:%b %d} → {data.prev_end:%b %d}"
+                              if getattr(data, "prev_start", None) else "")
+                st.markdown(f"**Change vs previous period** ({prev_label})" if prev_label
+                            else "**Change vs previous period**")
+                if prev_sub.empty:
+                    st.caption("This page had no sessions in the previous period — all of its "
+                               "traffic is new.")
+                else:
+                    ui.change_table(C.change_table(sub, prev_sub, chcol, "sessions"), prev_label)
+            else:
+                st.caption("Period-over-period changes per source are available with the live "
+                           "GA4 connection.")
 
     # Geography
     country = A.top_table(data.by_country, "country", "totalUsers", 10)

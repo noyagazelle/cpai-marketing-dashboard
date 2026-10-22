@@ -44,10 +44,37 @@ def render():
         st.caption("From your LinkedIn Company Page → **Analytics**, export **Visitors**, "
                    "**Followers**, and **Content/Updates** for the quarter, then drop them here. "
                    "Types are detected automatically — any subset works.")
-        uploads = st.file_uploader(
-            "Drag & drop this period's LinkedIn .xls / .xlsx files",
-            type=["xls", "xlsx", "xlsm"], accept_multiple_files=True, key="li_uploader",
-        )
+        _cur = st.session_state.get("li_data", {})
+        _is_sample = st.session_state.get("li_source", "").lower().startswith(("bundled", "sample"))
+        _has_files = bool(_cur) and not _is_sample
+
+        # Streamlit blanks a file_uploader whenever you leave the tab, which looked
+        # like the files were lost. So once files are loaded we show THEM (by name)
+        # and only bring the uploader back when the user asks to replace them.
+        if st.session_state.get("li_notice"):
+            st.info(st.session_state.pop("li_notice"))
+        replacing = st.session_state.get("li_replace", False) or not _has_files
+        uploads = None
+        if _has_files and not replacing:
+            with st.container(border=True):
+                st.markdown(f"**📎 Loaded files** · {_period_label(_cur)}")
+                for k in _cur:
+                    st.markdown(f'{_pill(True, _cur[k].label)} &nbsp;`{_cur[k].source_name}`',
+                                unsafe_allow_html=True)
+                st.caption("These stay loaded — across tabs, reloads and restarts — and power every "
+                           "other tab until you replace them.")
+                if st.button("📤 Upload different files", key="li_replace_btn"):
+                    st.session_state["li_replace"] = True
+                    st.session_state.pop("li_sig", None)
+                    st.rerun()
+        else:
+            uploads = st.file_uploader(
+                "Drag & drop this period's LinkedIn .xls / .xlsx files",
+                type=["xls", "xlsx", "xlsm"], accept_multiple_files=True, key="li_uploader",
+            )
+            if _has_files and st.button("Cancel — keep the current files", key="li_cancel_btn"):
+                st.session_state["li_replace"] = False
+                st.rerun()
 
         # Load new uploads once (detected by filename signature), then persist in
         # session AND archive to history so future periods can compare against it.
@@ -76,19 +103,22 @@ def render():
                     history.save_current(raw)
                     if period:
                         history.save_period(raw, history.period_key(*period))
+                        # Always show the LATEST period, compared to the one before it. If
+                        # this upload was an older period, it just joins the history.
+                        latest = history.list_periods()[-1]
+                        if latest["key"] != history.period_key(*period):
+                            st.session_state["li_data"] = history.load_period(latest["key"])
+                            st.session_state["li_source"] = (
+                                f"saved period ({latest['start']} → {latest['end']})")
+                            st.session_state["li_notice"] = (
+                                f"Saved **{period[0]:%b %d} → {period[1]:%b %d, %Y}** to history. "
+                                f"It's older than your latest period, so you're still viewing "
+                                f"**{latest['start']} → {latest['end']}** — now compared against it.")
+                    st.session_state["li_replace"] = False
+                    st.session_state.pop("compare_key", None)
                     st.rerun()
 
-        # Clear status of what's loaded — independent of the upload box above,
-        # which Streamlit blanks when you switch tabs (that's normal, not data loss).
-        _cur = st.session_state.get("li_data", {})
-        _is_sample = st.session_state.get("li_source", "").lower().startswith(("bundled", "sample"))
-        if _cur and not _is_sample:
-            _kinds = ", ".join(_cur[k].label for k in _cur)
-            st.success(f"✅ **Loaded & in use across every tab:** {_kinds}\n\n"
-                       f"Source: {st.session_state.get('li_source', '')}")
-            st.caption("ℹ️ The upload box above goes blank when you leave this tab and return — "
-                       "that's normal Streamlit behaviour, **not** data loss. Your files stay loaded "
-                       "and power all the other tabs. Drop new files above only to **replace** them.")
+        if _has_files:
             if st.button("↺ Reset to sample data"):
                 st.session_state["li_data"] = loaders.load_samples()
                 st.session_state["li_source"] = "bundled sample data (June 2026)"
@@ -125,33 +155,67 @@ def render():
             # label -> key, for both selectors
             key_by_label = {f"{p['start']} → {p['end']}": p["key"] for p in periods}
             labels = list(key_by_label.keys())
-
-            # 1) View ANY saved period as the current view.
             cur = loaders.linkedin_period(st.session_state.get("li_data", {}))
             cur_key = history.period_key(*cur) if cur else None
             cur_label = next((l for l, k in key_by_label.items() if k == cur_key), labels[-1])
-            view = st.selectbox("View which period", labels, index=labels.index(cur_label),
-                                help="Load any saved period as the current view.")
+
+            # What's being compared, in plain words — the default needs no clicks.
+            _cur_start = next((p["start"] for p in periods if p["key"] == cur_key), None)
+            _auto = history.previous_key(_cur_start) if _cur_start else None
+            _cmp = st.session_state.get("compare_key") or _auto
+            _cmp_label = next((l for l, k in key_by_label.items() if k == _cmp), None)
+            if _cmp_label:
+                st.success(f"📊 Viewing **{cur_label}**, compared against **{_cmp_label}**"
+                           + ("" if st.session_state.get("compare_key") else " (automatic)") + ".")
+            st.caption("Every upload is saved here automatically. The dashboard always shows the "
+                       "**latest** period and compares it to the one saved **before** it — no "
+                       "need to keep or re-upload old files.")
+
+            adv = st.expander("Advanced: view or compare a different saved period")
+
+            # 1) View ANY saved period as the current view (this session only —
+            #    a fresh visit always opens on the latest period).
+            view = adv.selectbox("View which period", labels, index=labels.index(cur_label),
+                                 help="Load any saved period as the current view.")
             if key_by_label[view] != cur_key:
                 st.session_state["li_data"] = history.load_period(key_by_label[view])
                 _vp = loaders.linkedin_period(st.session_state["li_data"])
                 st.session_state["li_source"] = (
                     f"saved period ({_vp[0]:%b %d} → {_vp[1]:%b %d, %Y})" if _vp else "saved period")
-                st.session_state.pop("li_sig", None)
+                st.session_state.pop("compare_key", None)
                 st.rerun()
 
             # 2) Compare against ANY other saved period.
             others = [l for l in labels if l != view]
             if others:
                 copts = ["Automatic (previous period)"] + others
-                choice = st.selectbox("Compare against", copts,
+                # keep the user's choice when they leave and return to this tab
+                label_by_key = {k: l for l, k in key_by_label.items()}
+                saved = label_by_key.get(st.session_state.get("compare_key"))
+                choice = adv.selectbox("Compare against", copts,
+                                      index=copts.index(saved) if saved in copts else 0,
                                       help="Any other saved period to use for the ▲/▼ changes.")
                 st.session_state["compare_key"] = (None if choice == copts[0]
                                                    else key_by_label[choice])
                 if st.session_state["compare_key"] is None:
                     st.session_state.pop("compare_key", None)
+
+                # Explain silent "no comparison" cases instead of leaving the user guessing.
+                view_p = next(p for p in periods if p["key"] == key_by_label[view])
+                cmp_key = st.session_state.get("compare_key") or history.previous_key(view_p["start"])
+                if cmp_key is None:
+                    st.warning(f"**{view}** is your earliest saved period, so there's nothing "
+                               "earlier to compare it to. Under **Advanced**, switch **View which "
+                               "period** to a later period, or pick one under **Compare against**.")
+                else:
+                    cmp_p = next(p for p in periods if p["key"] == cmp_key)
+                    if cmp_p["start"] <= view_p["end"] and view_p["start"] <= cmp_p["end"]:
+                        st.caption(f"⚠️ These periods overlap ({view} vs {cmp_p['start']} → "
+                                   f"{cmp_p['end']}), so some days are counted in both — changes "
+                                   "will look smaller than they really are.")
             else:
-                st.caption("Upload another period to compare across periods.")
+                st.caption("Only one period saved so far — next period's upload will be compared "
+                           "against it automatically.")
 
     # ------------------------------------------------------------------ #
     # GA4

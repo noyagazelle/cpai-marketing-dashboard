@@ -4,7 +4,9 @@ from __future__ import annotations
 import streamlit as st
 
 import charts
+import loaders
 import ui
+from analysis import compare as C
 from analysis import linkedin as L
 from analysis import ga4 as G
 
@@ -18,7 +20,7 @@ def _top_label(res, name):
     return df.iloc[0, 0], df.iloc[0]["share"]
 
 
-def render(data: dict, ga4=None):
+def render(data: dict, ga4=None, prev_data: dict | None = None):
     ui.section_header("Audience insights",
                       "The LinkedIn audience that follows us vs the audience that visits — and the site audience.")
 
@@ -61,6 +63,14 @@ def render(data: dict, ga4=None):
 
     # Side-by-side breakdowns
     st.markdown("#### Breakdowns")
+    prev_data = prev_data or {}
+    prev_followers, prev_visitors = prev_data.get("followers"), prev_data.get("visitors")
+    pp = loaders.linkedin_period(prev_data)
+    prev_label = f"{pp[0]:%b %d} → {pp[1]:%b %d}" if pp else ""
+    if prev_label:
+        st.caption(f"Under each chart: ▲ grew / ▼ shrank / = same vs the previous period ({prev_label}).")
+    else:
+        st.caption("Upload an earlier period to see whether each group grew, shrank, or stayed the same.")
     cats_present = [c for c in _CATS
                     if (followers and c in followers.demographics) or (visitors and c in visitors.demographics)]
     if cats_present:
@@ -75,6 +85,12 @@ def render(data: dict, ga4=None):
                         cols[0].plotly_chart(
                             charts.hbars(df.iloc[:, 0][::-1], df.iloc[:, 1][::-1]),
                             use_container_width=True)
+                        ex = C.excluded_note(followers, prev_followers, cat)
+                        if ex:
+                            cols[0].caption(f"ℹ️ Not shown (not relevant to our target audience): {ex}.")
+                        with cols[0]:
+                            ui.change_table(C.demographic_change(followers, prev_followers, cat, top=8),
+                                            prev_label, compact=True)
                 if visitors and cat in visitors.demographics:
                     df = L.demographic_table(visitors, cat, top=8)
                     if df is not None:
@@ -82,6 +98,12 @@ def render(data: dict, ga4=None):
                         cols[1].plotly_chart(
                             charts.hbars(df.iloc[:, 0][::-1], df.iloc[:, 1][::-1], color=charts.B.TEAL_2),
                             use_container_width=True)
+                        ex = C.excluded_note(visitors, prev_visitors, cat)
+                        if ex:
+                            cols[1].caption(f"ℹ️ Not shown (not relevant to our target audience): {ex}.")
+                        with cols[1]:
+                            ui.change_table(C.demographic_change(visitors, prev_visitors, cat, top=8),
+                                            prev_label, compact=True)
 
     # Site audience from GA4
     if has_ga4:

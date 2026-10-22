@@ -17,6 +17,7 @@ Files are stored raw (re-parsable) at "<key>/<kind>.<ext>", plus the durable
 from __future__ import annotations
 
 import io
+import json
 from datetime import date
 from pathlib import Path
 from typing import Optional
@@ -203,7 +204,8 @@ def _list_paths(prefix: str) -> list[str]:
     base = HISTORY_DIR / prefix
     if not base.exists():
         return []
-    return [str(f.relative_to(HISTORY_DIR)) for f in base.rglob("*") if f.is_file()]
+    # as_posix: callers split on "/", which a Windows str(path) wouldn't use
+    return [f.relative_to(HISTORY_DIR).as_posix() for f in base.rglob("*") if f.is_file()]
 
 
 def _delete_prefix(prefix: str):
@@ -242,23 +244,39 @@ def period_key(start: date, end: date) -> str:
     return f"{start:%Y-%m-%d}_{end:%Y-%m-%d}"
 
 
+_NAMES = "_names.json"  # {kind: original upload filename}, so the UI can show real names
+
+
 def _save(folder: str, raw_files: dict[str, tuple[str, bytes]]):
     _delete_prefix(f"{folder}/")
     for kind, (fname, blob) in raw_files.items():
         ext = Path(fname).suffix or ".xls"
         _write_bytes(f"{folder}/{kind}{ext}", blob)
+    _write_bytes(f"{folder}/{_NAMES}",
+                 json.dumps({k: fname for k, (fname, _) in raw_files.items()}).encode())
 
 
-def _load(folder: str) -> dict[str, ParsedLinkedIn]:
-    data: dict[str, ParsedLinkedIn] = {}
+def _read_raw(folder: str) -> dict[str, tuple[str, bytes]]:
+    """{kind: (original filename, bytes)} for a stored folder."""
+    names_blob = _read_bytes(f"{folder}/{_NAMES}")
+    names = json.loads(names_blob) if names_blob else {}
+    raw = {}
     for rel in sorted(_list_paths(f"{folder}/")):
         if ".xls" not in rel.lower():
             continue
         blob = _read_bytes(rel)
         if blob is None:
             continue
+        kind = Path(rel).stem
+        raw[kind] = (names.get(kind, Path(rel).name), blob)
+    return raw
+
+
+def _load(folder: str) -> dict[str, ParsedLinkedIn]:
+    data: dict[str, ParsedLinkedIn] = {}
+    for _, (fname, blob) in _read_raw(folder).items():
         try:
-            res = parse_linkedin(io.BytesIO(blob), source_name=Path(rel).name)
+            res = parse_linkedin(io.BytesIO(blob), source_name=fname)
             data[res.kind] = res
         except Exception:
             pass
@@ -294,7 +312,7 @@ def list_periods() -> list[dict]:
         if len(parts) < 2:
             continue
         key = parts[0]
-        if key == _CURRENT or "_" not in key:
+        if key == _CURRENT or "_" not in key or ".xls" not in parts[-1].lower():
             continue
         try:
             date.fromisoformat(key.split("_", 1)[0])  # validate the start date
